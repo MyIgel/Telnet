@@ -23,6 +23,10 @@
         {
             "name": "Christian Hammers",
             "email": "chammers@netcologne.de"
+        },
+        {
+            "name": "Igor Scheller",
+            "email": "igor.scheller@igorshp.de"
         }
     ],
     "require": {
@@ -40,4 +44,3 @@
         }
     }
 }
-

@@ -14,7 +14,7 @@ namespace Bestnetwork\Telnet;
 * Matthias Blaser <mb@adfinis.ch>
 *
 * Extended by Christian Hammers <chammers@netcologne.de>
-*
+* and Igor Scheller <igor.scheller@igorshp.de>
 */
 class TelnetClient {
 
@@ -24,12 +24,14 @@ class TelnetClient {
 
     protected $socket = NULL;
     protected $buffer = NULL;
+    protected $globalBuffer = NULL;
     protected $prompt;
     protected $errPrompt;
     protected $errNo;
     protected $errStr;
 
     protected $NULL;
+    protected $CR;
     protected $DC1;
     protected $WILL;
     protected $WONT;
@@ -37,7 +39,10 @@ class TelnetClient {
     protected $DONT;
     protected $IAC;
 
-    protected $globalBuffer = '';
+    /**
+     * @var bool Is binary mode enabled?
+     */
+    protected $binaryMode = false;
 
     /**
      * Constructor. Initialises host, port and timeout parameters
@@ -129,13 +134,32 @@ class TelnetClient {
      * @param string      $command Command to execute
      * @param null|string $prompt
      * @param null|string $errPrompt
-     * @return string Command result
+     * @return string|bool Command result or true in binary mode
      * @throws TelnetException
      */
     public function execute( $command, $prompt = NULL, $errPrompt = NULL ){
+        if($this->binaryMode){
+            $this->executeBlind($command);
+            return true;
+        }
+
         $this->write($command);
         $this->read($prompt, $errPrompt);
         return $this->getBuffer();
+    }
+
+    /**
+     * Executes the given command without output
+     *
+     * @param string $command
+     * @param bool   $addNewLine
+     */
+    public function executeBlind($command, $addNewLine = true){
+        $buffer = $this->buffer;
+
+        $this->write($command, $addNewLine);
+
+        $this->buffer = $buffer;
     }
 
     /**
@@ -205,6 +229,22 @@ class TelnetClient {
     }
 
     /**
+     * Returns true if binary mode is enabled
+     */
+    public function getBinaryMode(){
+        return $this->binaryMode;
+    }
+
+    /**
+     * Enables the binary mode
+     *
+     * @param bool $binaryMode
+     */
+    public function setBinaryMode( $binaryMode = true ){
+        $this->binaryMode = $binaryMode;
+    }
+
+    /**
      * Reads characters from the socket and adds them to command buffer.
      * Handles telnet control characters. Stops when prompt is encountered.
      *
@@ -260,6 +300,46 @@ class TelnetClient {
             }
 
         }while( $c != $this->NULL || $c != $this->DC1 );
+
+        return '';
+    }
+
+    /**
+     * Reads the given amount of bytes
+     *
+     * @param int $count
+     * @return string
+     * @throws TelnetException
+     */
+    public function readBytes( $count ){
+        if( !$this->socket ){
+            throw new TelnetException('Telnet connection closed');
+        }
+
+        // clear the buffer
+        $this->clearBuffer();
+
+        while( $count ){
+            $c = $this->getc();
+
+            if( $c === false ){
+                throw new TelnetException('Couldn\'t find the requested "' . $count . '" bytes, it was not in the data returned from server: ' . $this->buffer);
+            }
+
+            // Interpreted As Command
+            if( $c == $this->IAC && !$this->binaryMode ){
+                if( $this->negotiateTelnetOptions() ){
+                    continue;
+                }
+            }
+
+            // append current char to global buffer
+            $this->buffer .= $c;
+
+            $count -= strlen($c);
+        }
+
+        return $this->buffer;
     }
 
     /**
@@ -312,9 +392,16 @@ class TelnetClient {
     /**
      * Telnet control character magic
      *
+     * @returns bool
      * @throws TelnetException
      */
     protected function negotiateTelnetOptions(){
+        if( $this->binaryMode ){
+            $b = $this->getGlobalBuffer();
+            $this->buffer .= substr($b, -1);
+            return;
+        }
+
         $c = $this->getc();
 
         if( $c != $this->IAC ){
